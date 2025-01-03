@@ -1,0 +1,832 @@
+#define _CRT_SECURE_NO_WARNINGS
+#include <GL/glut.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <cstdlib>
+#include <math.h>
+#include <vector>
+#include <fstream>
+#include <string>
+#include <algorithm>
+
+enum GameState {
+    MENU,
+    PLAYING,
+    GAME_OVER,
+    HIGH_SCORES
+};
+
+struct Obstacle {
+    float x, y;
+    float speed;
+    float width;
+    float height;
+    int type; // 0 = car, 1 = truck, 2 = log
+    bool isActive;
+};
+
+struct Level {
+    int numObstacles;
+    float minSpeed;
+    float maxSpeed;
+    int requiredCrossings;
+};
+
+GameState currentState = MENU;
+int currentLevel = 1;
+int score = 0;
+int lives = 3;
+int highScores[5] = { 0 };
+float frogX = 400.0f;
+float frogY = 50.0f;
+float frogAngle = 0.0f;
+bool keys[256] = { false };
+const float MOVE_SPEED = 50.0f;
+const int WINDOW_WIDTH = 800;
+const int WINDOW_HEIGHT = 600;
+int crossingsCompleted = 0;
+std::vector<Obstacle> obstacles;
+int menuSelection = 0;
+float carY[3] = { 150.0f, 250.0f, 350.0f };
+float riverY[2] = { 400.0f, 500.0f };
+bool isOnLog = false;
+float currentLogSpeed = 0.0f;
+bool gameOver = false;
+bool isGameInitialized = false;
+const int FRAME_DELAY = 16;
+
+const int MAX_LEVELS = 5;
+Level levels[MAX_LEVELS] = {
+    {5, 3.0f, 5.0f, 1},
+    {7, 4.0f, 6.0f, 2},
+    {9, 5.0f, 7.0f, 3},
+    {11, 6.0f, 8.0f, 4},
+    {13, 7.0f, 9.0f, 5}
+};
+
+
+//function headers 
+void saveHighScores();
+void loadHighScores();
+void drawCircle(float cx, float cy, float r, int segments);
+void drawCar(float x, float y);
+void drawLog(float x, float y);
+void drawBackground();
+void drawFrog();
+void initLevel(int level);
+void drawMenu();
+void drawHighScores();
+void drawHUD();
+void drawObstacle(const Obstacle& obs);
+void updateGame();
+void display();
+void keyboardDown(unsigned char key, int x, int y);
+void handleMenuInput(unsigned char key);
+void handleMenuSelection();
+void handlePlayingInput(unsigned char key);
+void update(int value);
+void keyboardUp(unsigned char key, int x, int y);
+void specialKeyDown(int key, int x, int y);
+void specialKeyUp(int key, int x, int y);
+void resetGame();
+bool isInRiver();
+void handleDrowning();
+void handleGameOver();
+void handleSuccessfulCrossing();
+void updateHighScores();
+void resetFrogPosition();
+void cleanup();
+void init();
+
+
+void saveHighScores() {
+    std::ofstream file("highscores.txt");
+    if (file.is_open()) {
+        for (int i = 0; i < 5; i++) {
+            file << highScores[i] << std::endl;
+        }
+        file.close();
+    }
+}
+
+void loadHighScores() {
+    std::ifstream file("highscores.txt");
+    if (file.is_open()) {
+        for (int i = 0; i < 5; i++) {
+            file >> highScores[i];
+        }
+        file.close();
+    }
+}
+
+void drawCircle(float cx, float cy, float r, int segments) {
+    glBegin(GL_POLYGON);
+    for (int i = 0; i < segments; i++) {
+        float theta = 2.0f * 3.1415926f * float(i) / float(segments);
+        float x = r * cosf(theta);
+        float y = r * sinf(theta);
+        glVertex2f(x + cx, y + cy);
+    }
+    glEnd();
+}
+
+void drawCar(float x, float y) {
+    glColor3f(1.0f, 0.0f, 0.0f);
+    glBegin(GL_QUADS);
+    glVertex2f(x - 40, y - 15);
+    glVertex2f(x + 40, y - 15);
+    glVertex2f(x + 40, y + 15);
+    glVertex2f(x - 40, y + 15);
+    glEnd();
+
+    glColor3f(0.8f, 0.0f, 0.0f);
+    glBegin(GL_QUADS);
+    glVertex2f(x - 20, y + 15);
+    glVertex2f(x + 20, y + 15);
+    glVertex2f(x + 15, y + 25);
+    glVertex2f(x - 15, y + 25);
+    glEnd();
+
+    glColor3f(0.7f, 0.7f, 1.0f);
+    glBegin(GL_QUADS);
+    glVertex2f(x - 15, y + 16);
+    glVertex2f(x - 5, y + 16);
+    glVertex2f(x - 7, y + 23);
+    glVertex2f(x - 13, y + 23);
+    glEnd();
+
+    glBegin(GL_QUADS);
+    glVertex2f(x + 5, y + 16);
+    glVertex2f(x + 15, y + 16);
+    glVertex2f(x + 13, y + 23);
+    glVertex2f(x + 7, y + 23);
+    glEnd();
+
+    glColor3f(0.2f, 0.2f, 0.2f);
+    drawCircle(x - 25, y - 15, 8, 16);
+    drawCircle(x + 25, y - 15, 8, 16);
+}
+
+void drawLog(float x, float y) {
+    glColor3f(0.6f, 0.3f, 0.0f);
+    glBegin(GL_QUADS);
+    glVertex2f(x - 60, y - 20);
+    glVertex2f(x + 60, y - 20);
+    glVertex2f(x + 60, y + 20);
+    glVertex2f(x - 60, y + 20);
+    glEnd();
+
+    glColor3f(0.5f, 0.25f, 0.0f);
+    for (float i = -50; i <= 50; i += 20) {
+        glBegin(GL_LINES);
+        glVertex2f(x + i, y - 20);
+        glVertex2f(x + i, y + 20);
+        glEnd();
+    }
+}
+
+void drawBackground() {
+    glColor3f(0.2f, 0.8f, 0.2f);
+    glBegin(GL_QUADS);
+    glVertex2f(0, 0);
+    glVertex2f(WINDOW_WIDTH, 0);
+    glVertex2f(WINDOW_WIDTH, WINDOW_HEIGHT);
+    glVertex2f(0, WINDOW_HEIGHT);
+    glEnd();
+
+    // Draw roads
+    glColor3f(0.2f, 0.2f, 0.2f);
+    for (int i = 0; i < 3; i++) {
+        float y = carY[i] - 30;
+        glBegin(GL_QUADS);
+        glVertex2f(0, y);
+        glVertex2f(WINDOW_WIDTH, y);
+        glVertex2f(WINDOW_WIDTH, y + 60);
+        glVertex2f(0, y + 60);
+        glEnd();
+
+        glColor3f(1.0f, 1.0f, 1.0f);
+        for (float x = 0; x < WINDOW_WIDTH; x += 80) {
+            glBegin(GL_QUADS);
+            glVertex2f(x, y + 28);
+            glVertex2f(x + 40, y + 28);
+            glVertex2f(x + 40, y + 32);
+            glVertex2f(x, y + 32);
+            glEnd();
+        }
+        glColor3f(0.2f, 0.2f, 0.2f);
+    }
+
+    // Draw river
+    glColor3f(0.0f, 0.3f, 0.8f);
+    for (int i = 0; i < 2; i++) {
+        float y = riverY[i] - 30;
+        glBegin(GL_QUADS);
+        glVertex2f(0, y);
+        glVertex2f(WINDOW_WIDTH, y);
+        glVertex2f(WINDOW_WIDTH, y + 60);
+        glVertex2f(0, y + 60);
+        glEnd();
+    }
+
+    // Draw river waves
+    glColor3f(0.0f, 0.4f, 0.9f);
+    for (float x = 0; x < WINDOW_WIDTH; x += 40) {
+        glBegin(GL_TRIANGLES);
+        glVertex2f(x, riverY[0] - 20);
+        glVertex2f(x + 20, riverY[0] - 10);
+        glVertex2f(x + 40, riverY[0] - 20);
+        glEnd();
+    }
+
+    // Draw finish area
+    glColor3f(0.0f, 0.0f, 0.8f);
+    glBegin(GL_QUADS);
+    glVertex2f(0, WINDOW_HEIGHT - 50);
+    glVertex2f(WINDOW_WIDTH, WINDOW_HEIGHT - 50);
+    glVertex2f(WINDOW_WIDTH, WINDOW_HEIGHT);
+    glVertex2f(0, WINDOW_HEIGHT);
+    glEnd();
+}
+void drawHeart(float x, float y, float size) {
+    // Draw the two upper circles
+    glColor3f(1.0f, 0.0f, 0.0f);
+    drawCircle(x - size * 0.3f, y + size * 0.3f, size * 0.3f, 32); // Left circle
+    drawCircle(x + size * 0.3f, y + size * 0.3f, size * 0.3f, 32); // Right circle
+
+    // Draw the lower triangle
+    glBegin(GL_TRIANGLES);
+    glVertex2f(x - size * 0.6f, y + size * 0.3f); // Left point
+    glVertex2f(x + size * 0.6f, y + size * 0.3f); // Right point
+    glVertex2f(x, y - size * 0.6f);              // Bottom point
+    glEnd();
+}
+
+void drawFrog() {
+    float size = 20.0f;
+
+    glPushMatrix();
+    glTranslatef(frogX, frogY, 0.0f);
+    glRotatef(frogAngle, 0.0f, 0.0f, 1.0f);
+
+    glColor3f(0.0f, 0.6f, 0.0f);
+    drawCircle(0, 0, size, 32);
+
+    glColor3f(0.0f, 0.8f, 0.0f);
+    drawCircle(0, size * 0.5f, size * 0.6f, 32);
+
+    glColor3f(1.0f, 1.0f, 1.0f);
+    drawCircle(size * 0.3f, size * 0.7f, size * 0.2f, 16);
+    drawCircle(-size * 0.3f, size * 0.7f, size * 0.2f, 16);
+
+    glColor3f(0.0f, 0.0f, 0.0f);
+    drawCircle(size * 0.3f, size * 0.7f, size * 0.1f, 16);
+    drawCircle(-size * 0.3f, size * 0.7f, size * 0.1f, 16);
+
+    glColor3f(0.0f, 0.5f, 0.0f);
+    glBegin(GL_TRIANGLES);
+    glVertex2f(-size * 0.8f, 0);
+    glVertex2f(-size * 1.2f, size * 0.4f);
+    glVertex2f(-size * 0.4f, size * 0.4f);
+    glVertex2f(size * 0.8f, 0);
+    glVertex2f(size * 1.2f, size * 0.4f);
+    glVertex2f(size * 0.4f, size * 0.4f);
+    glEnd();
+
+    glBegin(GL_TRIANGLES);
+    glVertex2f(-size * 0.8f, -size * 0.2f);
+    glVertex2f(-size * 1.2f, -size * 0.6f);
+    glVertex2f(-size * 0.4f, -size * 0.6f);
+    glVertex2f(size * 0.8f, -size * 0.2f);
+    glVertex2f(size * 1.2f, -size * 0.6f);
+    glVertex2f(size * 0.4f, -size * 0.6f);
+    glEnd();
+
+    glPopMatrix();
+}
+
+void initLevel(int level) {
+    if (level < 1 || level > MAX_LEVELS) return;
+
+    obstacles.clear();
+    Level& currentLevelData = levels[level - 1];
+
+    // Cars
+    for (int i = 0; i < currentLevelData.numObstacles; i++) {
+        Obstacle obs;
+        obs.x = static_cast<float>(rand() % WINDOW_WIDTH);
+        obs.y = 150.0f + (i % 3) * 100.0f;
+        obs.speed = currentLevelData.minSpeed +
+            static_cast<float>(rand()) / RAND_MAX * (currentLevelData.maxSpeed - currentLevelData.minSpeed);
+        obs.type = 0;
+        obs.width = 80;
+        obs.height = 40;
+        obs.isActive = true;
+        obstacles.push_back(obs);
+    }
+
+    // Logs
+    for (int i = 0; i < 4; i++) {
+        Obstacle log;
+        log.x = static_cast<float>(rand() % WINDOW_WIDTH);
+        log.y = riverY[i % 2];
+        log.speed = (i % 2 == 0) ? 2.0f : -2.0f;
+        log.type = 2;
+        log.width = 120;
+        log.height = 40;
+        log.isActive = true;
+        obstacles.push_back(log);
+    }
+}
+
+
+void drawMenu() {
+    glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glColor3f(0.0f, 1.0f, 0.0f);
+    const char* title = "FROGGER";
+    int titleWidth = 0;
+    for (const char* c = title; *c != '\0'; c++) {
+        titleWidth += glutBitmapWidth(GLUT_BITMAP_TIMES_ROMAN_24, *c);
+    }
+    glRasterPos2f((WINDOW_WIDTH - titleWidth) / 2, WINDOW_HEIGHT - 100);
+    for (const char* c = title; *c != '\0'; c++) {
+        glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, *c);
+    }
+
+    const char* menuItems[] = {
+        "Start New Game",
+        "Resume Game",
+        "High Scores",
+        "Exit"
+    };
+    const int numItems = 4;
+    int menuStartY = WINDOW_HEIGHT - 200;
+    int menuSpacing = 50;
+
+    for (int i = 0; i < numItems; i++) {
+        int itemWidth = 0;
+        for (const char* c = menuItems[i]; *c != '\0'; c++) {
+            itemWidth += glutBitmapWidth(GLUT_BITMAP_HELVETICA_18, *c);
+        }
+
+        float xPos = (WINDOW_WIDTH - itemWidth) / 2;
+        float yPos = menuStartY - (i * menuSpacing);
+
+        if (i == menuSelection) {
+            glColor3f(0.2f, 0.6f, 0.2f);
+            glBegin(GL_QUADS);
+            glVertex2f(xPos - 20, yPos - 10);
+            glVertex2f(xPos + itemWidth + 20, yPos - 10);
+            glVertex2f(xPos + itemWidth + 20, yPos + 20);
+            glVertex2f(xPos - 20, yPos + 20);
+            glEnd();
+            glColor3f(1.0f, 1.0f, 1.0f);
+        }
+        else {
+            glColor3f(0.7f, 0.7f, 0.7f);
+        }
+        glRasterPos2f(xPos, yPos);
+        for (const char* c = menuItems[i]; *c != '\0'; c++) {
+            glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+        }
+    }
+
+    glColor3f(0.5f, 0.5f, 0.5f);
+    const char* instructions = "Use W/S keys to navigate, Enter to select";
+    int instrWidth = 0;
+    for (const char* c = instructions; *c != '\0'; c++) {
+        instrWidth += glutBitmapWidth(GLUT_BITMAP_HELVETICA_12, *c);
+    }
+    glRasterPos2f((WINDOW_WIDTH - instrWidth) / 2, 50.0f);
+    for (const char* c = instructions; *c != '\0'; c++) {
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, *c);
+    }
+}
+
+void drawHighScores() {
+    glColor3f(1.0f, 1.0f, 1.0f);
+
+    glRasterPos2f(350.0f, 500.0f);
+    const char* title = "High Scores";
+    for (const char* c = title; *c != '\0'; c++) {
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+    }
+
+    char scoreText[32];
+    for (int i = 0; i < 5; i++) {
+        sprintf(scoreText, "%d. %d", i + 1, highScores[i]);
+        glRasterPos2f(350.0f, 400.0f - i * 40.0f);
+        for (const char* c = scoreText; *c != '\0'; c++) {
+            glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+        }
+    }
+
+    glRasterPos2f(350.0f, 100.0f);
+    const char* returnText = "Press ESC to return to menu";
+    for (const char* c = returnText; *c != '\0'; c++) {
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+    }
+}
+
+void drawHUD() {
+    char text[32];
+    glColor3f(1.0f, 1.0f, 1.0f);
+
+    sprintf(text, "Score: %d", score);
+    glRasterPos2f(10.0f, WINDOW_HEIGHT - 20.0f);
+    for (const char* c = text; *c != '\0'; c++) {
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+    }
+
+    sprintf(text, "Level: %d", currentLevel);
+    glRasterPos2f(10.0f, WINDOW_HEIGHT - 60.0f);
+    for (const char* c = text; *c != '\0'; c++) {
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+    }
+
+    sprintf(text, "Crossings: %d/%d", crossingsCompleted, levels[currentLevel - 1].requiredCrossings);
+    glRasterPos2f(10.0f, WINDOW_HEIGHT - 80.0f);
+    for (const char* c = text; *c != '\0'; c++) {
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+    }
+
+    // Draw lives as hearts
+    float startX = 20.0f;
+    float startY = WINDOW_HEIGHT - 35.0f;
+    float heartSize = 15.0f;
+    for (int i = 0; i < lives; i++) {
+        drawHeart(startX + i * (heartSize * 1.5f), startY, heartSize);
+    }
+}
+
+
+void drawObstacle(const Obstacle& obs) {
+    if (obs.type == 0) {
+        drawCar(obs.x, obs.y);
+    }
+    else if (obs.type == 2) {
+        drawLog(obs.x, obs.y);
+    }
+}
+
+
+void updateGame() {
+    if (currentState != PLAYING || !isGameInitialized) return;
+
+    // Keep frog within bounds
+    frogX = std::max(20.0f, std::min(frogX, static_cast<float>(WINDOW_WIDTH - 20)));
+    frogY = std::max(20.0f, std::min(frogY, static_cast<float>(WINDOW_HEIGHT - 20)));
+
+    isOnLog = false;
+    currentLogSpeed = 0.0f;
+
+    for (auto& obs : obstacles) {
+        obs.x += obs.speed;
+
+        // Wrap around screen
+        if (obs.x > WINDOW_WIDTH + obs.width / 2) {
+            obs.x = -obs.width / 2;
+        }
+        else if (obs.x < -obs.width / 2) {
+            obs.x = WINDOW_WIDTH + obs.width / 2;
+        }
+
+        // Collision detection
+        if (frogX > obs.x - obs.width / 2 && frogX < obs.x + obs.width / 2 &&
+            frogY > obs.y - obs.height / 2 && frogY < obs.y + obs.height / 2) {
+
+            if (obs.type == 0) { // Car collision
+                lives--;
+                if (lives <= 0) {
+                    handleGameOver();
+                }
+                else {
+                    resetFrogPosition();
+                }
+            }
+            else if (obs.type == 2) { // Log collision
+                isOnLog = true;
+                currentLogSpeed = obs.speed;
+            }
+        }
+    }
+
+    // Handle log riding and river collision
+    if (isOnLog) {
+        frogX += currentLogSpeed;
+    }
+    else if (isInRiver()) {
+        handleDrowning();
+    }
+
+    // Handle successful crossing
+    if (frogY >= WINDOW_HEIGHT - 50) {
+        handleSuccessfulCrossing();
+    }
+}
+
+void display() {
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    switch (currentState) {
+    case MENU:
+        drawMenu();
+        break;
+
+    case PLAYING:
+        drawBackground();
+        for (const auto& obs : obstacles) {
+            drawObstacle(obs);
+        }
+        drawFrog();
+        drawHUD();
+        break;
+
+    case HIGH_SCORES:
+        drawHighScores();
+        break;
+
+    case GAME_OVER:
+        glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glColor3f(1.0f, 0.0f, 0.0f);
+        glRasterPos2f(350.0f, 300.0f);
+        const char* gameOverText = "Game Over!";
+        for (const char* c = gameOverText; *c != '\0'; c++) {
+            glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+        }
+
+        char scoreText[32];
+        sprintf(scoreText, "Final Score: %d", score);
+        glRasterPos2f(350.0f, 250.0f);
+        for (const char* c = scoreText; *c != '\0'; c++) {
+            glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+        }
+
+        glColor3f(0.7f, 0.7f, 0.7f);
+        glRasterPos2f(350.0f, 200.0f);
+        const char* returnText = "Press ESC to return to menu";
+        for (const char* c = returnText; *c != '\0'; c++) {
+            glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+        }
+        break;
+    }
+
+    glutSwapBuffers();
+}
+
+void keyboardDown(unsigned char key, int x, int y) {
+    keys[key] = true;
+
+    switch (currentState) {
+    case MENU:
+        handleMenuInput(key);
+        break;
+    case PLAYING:
+        handlePlayingInput(key);
+        break;
+    case HIGH_SCORES:
+    case GAME_OVER:
+        if (key == 27 || key == 13) { // ESC or Enter
+            currentState = MENU;
+        }
+        break;
+    }
+
+    glutPostRedisplay();
+}
+
+void handleMenuInput(unsigned char key) {
+    switch (key) {
+    case 13: // Enter
+        handleMenuSelection();
+        break;
+    case 'w':
+    case 'W':
+        menuSelection = (menuSelection - 1 + 4) % 4;
+        break;
+    case 's':
+    case 'S':
+        menuSelection = (menuSelection + 1) % 4;
+        break;
+    case 27: // ESC
+        cleanup();
+        exit(0);
+        break;
+    }
+}
+void handleMenuSelection() {
+    switch (menuSelection) {
+    case 0: // Start New Game
+        resetGame();
+        currentState = PLAYING;
+        break;
+    case 1: // Resume Game
+        if (isGameInitialized && !gameOver) {
+            currentState = PLAYING;
+        }
+        break;
+    case 2: // High Scores
+        currentState = HIGH_SCORES;
+        break;
+    case 3: // Exit
+        cleanup();
+        exit(0);
+        break;
+    }
+}
+
+void handlePlayingInput(unsigned char key) {
+    switch (key) {
+    case 'w':
+    case 'W':
+        if (frogY + MOVE_SPEED <= WINDOW_HEIGHT - 50) {
+            frogY += MOVE_SPEED;
+            frogAngle = 0;
+        }
+        break;
+    case 's':
+    case 'S':
+        if (frogY - MOVE_SPEED >= 50) {
+            frogY -= MOVE_SPEED;
+            frogAngle = 180;
+        }
+        break;
+    case 'a':
+    case 'A':
+        if (frogX - MOVE_SPEED >= 20) {
+            frogX -= MOVE_SPEED;
+            frogAngle = 90;
+        }
+        break;
+    case 'd':
+    case 'D':
+        if (frogX + MOVE_SPEED <= WINDOW_WIDTH - 20) {
+            frogX += MOVE_SPEED;
+            frogAngle = -90;
+        }
+        break;
+    case 'p':
+    case 'P':
+    case 27: // ESC
+        currentState = MENU;
+        break;
+    case 'r':
+    case 'R':
+        resetFrogPosition();
+        break;
+    }
+}
+
+
+void update(int value) {
+    if (currentState == PLAYING) {
+        updateGame();
+    }
+    glutPostRedisplay();
+    glutTimerFunc(FRAME_DELAY, update, 0);
+}
+
+void keyboardUp(unsigned char key, int x, int y) {
+    keys[key] = false;
+}
+
+void specialKeyDown(int key, int x, int y) {
+    switch (key) {
+    case GLUT_KEY_UP:
+        keys[GLUT_KEY_UP] = true;
+        break;
+    case GLUT_KEY_DOWN:
+        keys[GLUT_KEY_DOWN] = true;
+        break;
+    case GLUT_KEY_LEFT:
+        keys[GLUT_KEY_LEFT] = true;
+        break;
+    case GLUT_KEY_RIGHT:
+        keys[GLUT_KEY_RIGHT] = true;
+        break;
+    }
+}
+
+void specialKeyUp(int key, int x, int y) {
+    switch (key) {
+    case GLUT_KEY_UP:
+        keys[GLUT_KEY_UP] = false;
+        break;
+    case GLUT_KEY_DOWN:
+        keys[GLUT_KEY_DOWN] = false;
+        break;
+    case GLUT_KEY_LEFT:
+        keys[GLUT_KEY_LEFT] = false;
+        break;
+    case GLUT_KEY_RIGHT:
+        keys[GLUT_KEY_RIGHT] = false;
+        break;
+    }
+}
+
+void resetGame() {
+    obstacles.clear();
+    currentLevel = 1;
+    score = 0;
+    lives = 3;
+    crossingsCompleted = 0;
+    frogX = WINDOW_WIDTH / 2;
+    frogY = 50;
+    frogAngle = 0;
+    gameOver = false;
+    isOnLog = false;
+    currentLogSpeed = 0.0f;
+    isGameInitialized = true;
+    initLevel(currentLevel);
+}
+
+// New helper functions
+bool isInRiver() {
+    return (frogY >= riverY[0] - 20 && frogY <= riverY[0] + 20) ||
+        (frogY >= riverY[1] - 20 && frogY <= riverY[1] + 20);
+}
+
+void handleDrowning() {
+    lives--;
+    if (lives <= 0) {
+        handleGameOver();
+    }
+    else {
+        resetFrogPosition();
+    }
+}
+void handleGameOver() {
+    currentState = GAME_OVER;
+    updateHighScores();
+    saveHighScores();
+}
+void handleSuccessfulCrossing() {
+    crossingsCompleted++;
+    score += 100 * currentLevel;
+
+    if (crossingsCompleted >= levels[currentLevel - 1].requiredCrossings) {
+        currentLevel++;
+        crossingsCompleted = 0;
+
+        if (currentLevel > MAX_LEVELS) {
+            handleGameOver();
+        }
+        else {
+            initLevel(currentLevel);
+        }
+    }
+
+    resetFrogPosition();
+}
+void updateHighScores() {
+    for (int i = 0; i < 5; i++) {
+        if (score > highScores[i]) {
+            for (int j = 4; j > i; j--) {
+                highScores[j] = highScores[j - 1];
+            }
+            highScores[i] = score;
+            break;
+        }
+    }
+}
+
+void resetFrogPosition() {
+    frogX = WINDOW_WIDTH / 2;
+    frogY = 50;
+    frogAngle = 0;
+}
+
+void cleanup() {
+    saveHighScores();
+    obstacles.clear();
+}
+
+void init() {
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT);
+    loadHighScores();
+}
+
+int main(int argc, char** argv) {
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
+    glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
+    glutCreateWindow("Frogger");
+
+    init();
+    atexit(cleanup);
+
+    glutDisplayFunc(display);
+    glutKeyboardFunc(keyboardDown);
+    glutKeyboardUpFunc(keyboardUp);
+    glutSpecialFunc(specialKeyDown);
+    glutSpecialUpFunc(specialKeyUp);
+    glutTimerFunc(FRAME_DELAY, update, 0);
+
+    glutMainLoop();
+    return 0;
+}
